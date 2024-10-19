@@ -2,8 +2,15 @@ package main
 
 import (
 	"math/rand"
+	"net/http"
 	"time"
 )
+
+type apiFunc func(w http.ResponseWriter, r *http.Request) error
+
+type apiError struct {
+	Error string `json:"error"`
+}
 
 type LoginRequest struct {
 	Number   int64  `json:"number"`
