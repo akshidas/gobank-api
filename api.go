@@ -11,6 +11,7 @@ import (
 
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type ApiServer struct {
@@ -20,7 +21,9 @@ type ApiServer struct {
 
 func (s *ApiServer) Run() {
 	r := mux.NewRouter()
+
 	r.HandleFunc("/", handler(root))
+	r.HandleFunc("/login", handler(s.login))
 	r.HandleFunc("/accounts", handler(s.handleAccounts))
 	r.HandleFunc("/accounts/transfer", handler(s.transfer))
 	r.HandleFunc("/accounts/{id}", withJWTAuth(handler(s.handleAccountById), s.store))
@@ -34,8 +37,33 @@ func root(w http.ResponseWriter, r *http.Request) error {
 	return writeJson(w, http.StatusOK, "🚀 the server is up and running")
 }
 
-// Accounts
+func (s *ApiServer) login(w http.ResponseWriter, r *http.Request) error {
+	loginPayload := &LoginRequest{}
 
+	if err := json.NewDecoder(r.Body).Decode(loginPayload); err != nil {
+		return err
+	}
+
+	defer r.Body.Close()
+	account, err := s.store.GetAccountByNumber(loginPayload.Number)
+	if err != nil {
+		return err
+	}
+
+	if !isPasswordValid(account.Password, loginPayload.Password) {
+		permissionDenied(w)
+		return nil
+	}
+
+	tokenStaring, err := createJwt(*account)
+	if err != nil {
+		return err
+	}
+
+	return writeJson(w, http.StatusCreated, tokenStaring)
+}
+
+// Accounts
 // Handler Routes
 func (s *ApiServer) handleAccounts(w http.ResponseWriter, r *http.Request) error {
 	if r.Method == "GET" {
@@ -79,7 +107,12 @@ func (s *ApiServer) createAccounts(w http.ResponseWriter, r *http.Request) error
 	}
 
 	defer r.Body.Close()
-	account := NewAccount(newAccountPayload.FirstName, newAccountPayload.LastName)
+	hashedPassword, err := hashPassword(newAccountPayload.Password)
+	if err != nil {
+		return err
+	}
+
+	account := NewAccount(newAccountPayload.FirstName, newAccountPayload.LastName, hashedPassword)
 	if err := s.store.CreateAccount(account); err != nil {
 		return err
 	}
@@ -188,7 +221,6 @@ func withJWTAuth(handlerFunction http.HandlerFunc, s Storage) http.HandlerFunc {
 }
 
 // Helpers
-
 func keyFun(token *jwt.Token) (interface{}, error) {
 	secret := os.Getenv("JWT_SECRET")
 	if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -245,4 +277,24 @@ func getId(r *http.Request) (int, error) {
 
 	return parsedId, nil
 
+}
+
+func hashPassword(password string) (string, error) {
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+
+	if err != nil {
+		return "", fmt.Errorf("Failed to hash password")
+	}
+	return string(hashedPassword), nil
+
+}
+
+func isPasswordValid(hashedPassword, password string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+
+	if err == nil {
+		return true
+	}
+
+	return false
 }
