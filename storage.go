@@ -65,25 +65,19 @@ func (s *PostgresStore) CreateAccount(a *Account) error {
 		a.Balance,
 		a.CreatedAt)
 
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func (s *PostgresStore) DeleteAccount(id int) error {
 	query := "delete from account where id = $1"
 	_, err := s.db.Query(query, id)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func (s *PostgresStore) UpdateAccount(a *Account) error {
-	return nil
+	query := `update account set balance = $1 where id = $2`
+	_, err := s.db.Query(query, a.Balance, a.Id)
+	return err
 }
 
 func (s *PostgresStore) GetAccountById(id int) (*Account, error) {
