@@ -25,7 +25,7 @@ func (s *ApiServer) Run() {
 	r.HandleFunc("/", handler(root))
 	r.HandleFunc("/login", handler(s.login))
 	r.HandleFunc("/accounts", handler(s.handleAccounts))
-	r.HandleFunc("/accounts/transfer", handler(s.transfer))
+	r.HandleFunc("/accounts/transfer/{id}", withJWTAuth(handler(s.transfer), s.store))
 	r.HandleFunc("/accounts/{id}", withJWTAuth(handler(s.handleAccountById), s.store))
 
 	log.Printf("🚀 Server starting on port %s\n", s.port)
@@ -38,6 +38,10 @@ func root(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *ApiServer) login(w http.ResponseWriter, r *http.Request) error {
+	if r.Method != "POST" {
+		return fmt.Errorf("Method not allowed")
+	}
+
 	loginPayload := &LoginRequest{}
 
 	if err := json.NewDecoder(r.Body).Decode(loginPayload); err != nil {
@@ -162,15 +166,42 @@ func (s *ApiServer) transfer(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	defer r.Body.Close()
+
+	id, err := getId(r)
+	if err != nil {
+		return err
+	}
+
+	fromAccount, err := s.store.GetAccountById(id)
+	if err != nil {
+		return err
+	}
+
+	if fromAccount.Balance < int64(newAccountPayload.Amount) {
+		return writeJson(w, http.StatusBadRequest, "insufficient balance")
+	}
+
 	toAccount, err := s.store.GetAccountById(newAccountPayload.ToAccount)
 	if err != nil {
 		return err
 	}
 
-	toAccount.Balance = int64(newAccountPayload.Amount)
+	if toAccount.Id == fromAccount.Id {
+		return writeJson(w, http.StatusBadRequest, "cannot do self transfer")
+
+	}
+
+	toAccount.Balance = toAccount.Balance + int64(newAccountPayload.Amount)
+	fromAccount.Balance = fromAccount.Balance - int64(newAccountPayload.Amount)
+
 	if err := s.store.UpdateAccount(toAccount); err != nil {
 		return err
 	}
+
+	if err := s.store.UpdateAccount(fromAccount); err != nil {
+		return err
+	}
+
 	return writeJson(w, http.StatusOK, "transfer complete")
 }
 
@@ -182,7 +213,6 @@ func permissionDenied(w http.ResponseWriter) {
 // Middleware
 func withJWTAuth(handlerFunction http.HandlerFunc, s Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("Calling JWT Auth")
 		tokenString := r.Header.Get("x-jwt-token")
 		token, err := validateJWT(tokenString)
 
@@ -280,7 +310,7 @@ func getId(r *http.Request) (int, error) {
 }
 
 func hashPassword(password string) (string, error) {
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 
 	if err != nil {
 		return "", fmt.Errorf("Failed to hash password")
